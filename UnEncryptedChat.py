@@ -1,7 +1,22 @@
+import sys
+import subprocess
+
+try:
+    import rsa
+except ImportError:
+    print("Installing the 'rsa' package...")
+
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "rsa"])
+        import rsa
+    except subprocess.CalledProcessError as e:
+        print(f"Error installing 'rsa': {e}")
+        sys.exit(1)
+
 import socket
 import threading
 
-import rsa
+
 
 
 ip_address = input("Enter the IP address: ")
