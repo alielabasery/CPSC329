@@ -32,7 +32,6 @@ def sending_messages(c):
 
 def receiving_messages(c):
     while True:
-        message = input("")
         print("Partner: " + c.recv(1024).decode())
 
 
