@@ -4,18 +4,20 @@ import threading
 import rsa
 
 
+ip_address = input("Enter the IP address: ")
+
 choice = input ("Do you want to host (1), or to connect (2): ")
 
 if choice == "1" :
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.bind(("10.0.0.149", 9999))
+        server.bind((ip_address, 9999))
         server.listen()
 
         client, _ = server.accept()
 
 elif choice == "2" : 
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.connect(("10.0.0.149", 9999))
+    client.connect((ip_address, 9999))
 
 else:
     exit()
