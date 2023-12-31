@@ -3,7 +3,8 @@ import subprocess
 import socket
 import threading
 import rsa
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QRadioButton, QPushButton, QTextEdit, QHBoxLayout, QSizePolicy
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QRadioButton, QPushButton, QTextEdit, QMessageBox
+from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
 
 def install_rsa_package():
     try:
@@ -24,13 +25,107 @@ except ImportError:
 
     rsa = install_rsa_package()
 
+class WorkerSignals(QObject):
+    receive_message_signal = pyqtSignal(str)
+    close_connection_signal = pyqtSignal()
+
+class Worker(QThread):
+    def __init__(self, ip_address, is_host, public_key, private_key, parent=None):
+        super(Worker, self).__init__(parent)
+        self.client = None
+        self.public_partner = None
+        self.ip_address = ip_address
+        self.is_host = is_host
+        self.public_key = public_key
+        self.private_key = private_key
+        self.signals = WorkerSignals()
+
+    def setup_server(self):
+        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.bind((self.ip_address, 9999))
+        server.listen()
+        print(f"Server listening on {self.ip_address}:9999")
+        client, _ = server.accept()
+        client.send(self.public_key.save_pkcs1("PEM"))
+        public_partner = rsa.PublicKey.load_pkcs1(client.recv(1024))
+        self.signals.receive_message_signal.emit(f"Connected to {self.ip_address}:9999")
+        return client, public_partner
+
+    def setup_client(self):
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            client.connect((self.ip_address, 9999))
+            self.signals.receive_message_signal.emit(f"Connected to {self.ip_address}:9999")
+        except ConnectionRefusedError as e:
+            self.signals.receive_message_signal.emit(f"Connection refused. Is the server running on {self.ip_address}:9999?")
+            self.signals.close_connection_signal.emit()  # Emit close connection signal
+            return  # Stop the worker thread
+
+        public_partner = rsa.PublicKey.load_pkcs1(client.recv(1024))
+        client.send(self.public_key.save_pkcs1("PEM"))
+        return client, public_partner
+
+    def run(self):
+        if self.is_host:
+            self.client, self.public_partner = self.setup_server()
+        else:
+            self.client, self.public_partner = self.setup_client()
+
+        threading.Thread(target=self.send_message).start()
+
+        while True:
+            try:
+                if self.client is None or self.client.fileno() == -1:
+                    break
+
+                encrypted_message = self.client.recv(1024)
+                if not encrypted_message:
+                    break
+
+                decrypted_message = rsa.decrypt(encrypted_message, self.private_key).decode()
+                self.signals.receive_message_signal.emit(f"Partner: {decrypted_message}")
+
+                if decrypted_message.lower() == 'exit':
+                    break
+            except Exception as e:
+                self.signals.receive_message_signal.emit(f"Error receiving message: {e}")
+                if "Decryption failed" in str(e):
+                    self.signals.receive_message_signal.emit("Decryption failed. Ensure keys match.")
+                break
+
+        self.signals.close_connection_signal.emit()
+    
+    def send_message(self):
+            while True:
+                try:
+                    if self.client is None or self.client.fileno() == -1:
+                        break
+
+                    message = input("You: ")  # Get user input
+                    if message.lower() == 'exit':
+                        self.signals.close_connection_signal.emit()
+                        break
+
+                    self.client.send(rsa.encrypt(message.encode(), self.public_partner))
+                except Exception as e:
+                    self.signals.receive_message_signal.emit(f"Error sending message: {e}")
+                    self.signals.close_connection_signal.emit()
+                    break
+    
+    def close_connection(self):
+        try:
+            if self.client:
+                self.client.shutdown(socket.SHUT_RDWR)
+                self.client.close()
+        except Exception as e:
+            self.signals.receive_message_signal.emit(f"Error closing connection: {e}")
+
 class ChatApp(QWidget):
     def __init__(self):
         super().__init__()
 
         self.public_key, self.private_key = self.generate_key_pair()
-        self.public_partner = None
-        self.client = None
+        self.worker = None
 
         self.init_ui()
 
@@ -38,6 +133,7 @@ class ChatApp(QWidget):
         self.ip_label = QLabel('Enter IP address:')
         self.ip_entry = QLineEdit()
 
+        self.fetch_ip_button = QPushButton('Fetch My IP')
         self.radio_host = QRadioButton('Host')
         self.radio_connect = QRadioButton('Connect')
 
@@ -51,6 +147,7 @@ class ChatApp(QWidget):
         self.input_text = QTextEdit()
 
         layout = QVBoxLayout()
+        layout.addWidget(self.fetch_ip_button)
         layout.addWidget(self.ip_label)
         layout.addWidget(self.ip_entry)
         layout.addWidget(self.radio_host)
@@ -62,82 +159,48 @@ class ChatApp(QWidget):
 
         self.setLayout(layout)
 
+        self.fetch_ip_button.clicked.connect(self.fetch_ip_address)
         self.start_button.clicked.connect(self.start_chat)
         self.stop_button.clicked.connect(self.stop_chat)
 
     def generate_key_pair(self):
         return rsa.newkeys(1024)
 
-    def setup_server(self, ip_address):
-        server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.bind((ip_address, 9999))
-        server.listen()
-        print(f"Server listening on {ip_address}:9999")
-        client, _ = server.accept()
-        client.send(self.public_key.save_pkcs1("PEM"))
-        public_partner = rsa.PublicKey.load_pkcs1(client.recv(1024))
-        return client, public_partner
-
-    def setup_client(self, ip_address):
-        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect((ip_address, 9999))
-        print(f"Connected to {ip_address}:9999")
-        public_partner = rsa.PublicKey.load_pkcs1(client.recv(1024))
-        client.send(self.public_key.save_pkcs1("PEM"))
-        return client, public_partner
-
-    def send_message(self):
-        message = self.input_text.toPlainText().strip()
-        if message.lower() == 'exit':
-            self.stop_chat()
-            return
+    def fetch_ip_address(self):
         try:
-            self.client.send(rsa.encrypt(message.encode(), self.public_partner))
-            self.input_text.clear()
+            # Try to fetch the local IP address using the socket library
+            self.ip_entry.setText(socket.gethostbyname(socket.gethostname()))
         except Exception as e:
-            print(f"Error sending message: {e}")
-            self.stop_chat()
-
-    def receive_message(self):
-        while True:
-            try:
-                decrypted_message = rsa.decrypt(self.client.recv(1024), self.private_key).decode()
-                self.output_text.append(f"Partner: {decrypted_message}")
-                if decrypted_message.lower() == 'exit':
-                    self.stop_chat()
-                    break
-            except Exception as e:
-                print(f"Error receiving message: {e}")
-                self.stop_chat()
-                break
+            QMessageBox.critical(self, "Error", f"Error fetching IP address: {e}")
 
     def start_chat(self):
         ip_address = self.ip_entry.text()
         if self.radio_host.isChecked():
-            self.client, self.public_partner = self.setup_server(ip_address)
+            self.worker = Worker(ip_address, True, self.public_key, self.private_key, self)
         elif self.radio_connect.isChecked():
-            self.client, self.public_partner = self.setup_client(ip_address)
+            self.worker = Worker(ip_address, False, self.public_key, self.private_key, self)
         else:
             return
 
-        threading.Thread(target=self.send_message).start()
-        threading.Thread(target=self.receive_message).start()
+        self.worker.signals.receive_message_signal.connect(self.update_output_text)
+        self.worker.signals.close_connection_signal.connect(self.stop_chat)
+        self.worker.start()
 
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
 
     def stop_chat(self):
-        self.close_connection()
+        if self.worker:
+            self.worker.close_connection()
+            self.worker.wait()  # Wait for the worker thread to finish
+            self.worker = None
+
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
 
-    def close_connection(self):
-        try:
-            self.client.shutdown(socket.SHUT_RDWR)
-            self.client.close()
-        except Exception as e:
-            print(f"Error closing connection: {e}")
-
+    @pyqtSlot(str)
+    def update_output_text(self, message):
+        self.output_text.append(message)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
