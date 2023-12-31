@@ -3,8 +3,10 @@ import subprocess
 import socket
 import threading
 import rsa
+from PyQt5 import QtGui
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QRadioButton, QPushButton, QTextEdit, QMessageBox
 from PyQt5.QtCore import QObject, QThread, pyqtSignal, pyqtSlot
+
 
 def install_rsa_package():
     try:
@@ -163,6 +165,10 @@ class ChatApp(QWidget):
         self.send_button.clicked.connect(self.send_message)
         self.stop_button.clicked.connect(self.stop_chat)
 
+        self.setWindowTitle('Chatter')
+
+
+
     def generate_key_pair(self):
         return rsa.newkeys(1024)
 
@@ -200,12 +206,19 @@ class ChatApp(QWidget):
 
     @pyqtSlot(str)
     def update_output_text(self, message):
+        if message.startswith("You: "):
+            self.output_text.setTextColor(QtGui.QColor("blue"))
+        elif message.startswith("Partner: "):
+            self.output_text.setTextColor(QtGui.QColor("green"))
+
         self.output_text.append(message)
+        self.output_text.setTextColor(QtGui.QColor("black"))
 
     @pyqtSlot()
     def send_message(self):
         if self.worker:
             message = self.input_text.toPlainText()
+            self.output_text.append(f"You: {message}")  # Append your message to the output log
             self.worker.send_message(message)
             self.input_text.clear()
 
