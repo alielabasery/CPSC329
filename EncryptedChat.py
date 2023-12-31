@@ -95,22 +95,19 @@ class Worker(QThread):
 
         self.signals.close_connection_signal.emit()
     
-    def send_message(self):
-            while True:
-                try:
-                    if self.client is None or self.client.fileno() == -1:
-                        break
+    def send_message(self, message):
+        try:
+            if self.client is None or self.client.fileno() == -1:
+                return
 
-                    message = input("You: ")  # Get user input
-                    if message.lower() == 'exit':
-                        self.signals.close_connection_signal.emit()
-                        break
+            if message.lower() == 'exit':
+                self.signals.close_connection_signal.emit()
+                return
 
-                    self.client.send(rsa.encrypt(message.encode(), self.public_partner))
-                except Exception as e:
-                    self.signals.receive_message_signal.emit(f"Error sending message: {e}")
-                    self.signals.close_connection_signal.emit()
-                    break
+            self.client.send(rsa.encrypt(message.encode(), self.public_partner))
+        except Exception as e:
+            self.signals.receive_message_signal.emit(f"Error sending message: {e}")
+            self.signals.close_connection_signal.emit()
     
     def close_connection(self):
         try:
@@ -140,6 +137,7 @@ class ChatApp(QWidget):
         self.start_button = QPushButton('Start Chat')
         self.stop_button = QPushButton('Stop Chat')
         self.stop_button.setEnabled(False)
+        self.send_button = QPushButton('Send')
 
         self.output_text = QTextEdit()
         self.output_text.setReadOnly(True)
@@ -156,11 +154,13 @@ class ChatApp(QWidget):
         layout.addWidget(self.stop_button)
         layout.addWidget(self.output_text)
         layout.addWidget(self.input_text)
+        layout.addWidget(self.send_button)
 
         self.setLayout(layout)
 
         self.fetch_ip_button.clicked.connect(self.fetch_ip_address)
         self.start_button.clicked.connect(self.start_chat)
+        self.send_button.clicked.connect(self.send_message)
         self.stop_button.clicked.connect(self.stop_chat)
 
     def generate_key_pair(self):
@@ -201,6 +201,13 @@ class ChatApp(QWidget):
     @pyqtSlot(str)
     def update_output_text(self, message):
         self.output_text.append(message)
+
+    @pyqtSlot()
+    def send_message(self):
+        if self.worker:
+            message = self.input_text.toPlainText()
+            self.worker.send_message(message)
+            self.input_text.clear()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
